@@ -1,0 +1,32 @@
+ TÓM TẮT - CÔNG THỨC NHỚ
+🔧 Các hàm cơ bản:
+java// GỬI message
+String → getBytes() → ByteBuffer.wrap() → channel.write()
+
+// NHẬN message
+channel.read(buffer) → buffer.flip() → new String(buffer.array())
+
+// GỬI file
+FileChannel.read(buffer) → buffer.flip() → channel.write(buffer)
+
+// NHẬN file
+channel.read(buffer) → buffer.flip() → FileChannel.write(buffer)
+🔵 Server pattern:
+java1. Selector.open()
+2. ServerSocketChannel.open() → bind() → register(OP_ACCEPT)
+3. while(true) {
+    selector.select()
+    for (key : keys) {
+        if (isAcceptable) → accept() → register(OP_READ)
+        if (isReadable) → read() → process()
+    }
+}
+🔴 Client pattern:
+java1. SocketChannel.open(address)
+2. sendMessage()
+3. receiveFile() {
+    while (read != -1) {
+        write to file
+    }
+}
+4. close()
