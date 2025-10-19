@@ -19,11 +19,17 @@ public class TCPServer {
         System.out.println("CLIENT> " + message);
 
         //Send back msg after process
-        uppercaseMsg(channel, message);
-        System.out.println("Done uppercase");
+//        uppercaseMsg(channel, message);
+//        System.out.println("Done uppercase");
+//
+//        reverseMessage(channel, message);
+//        System.out.println("Done reverse");
 
-        reverseMessage(channel, message);
-        System.out.println("Done reverse");
+        String uppercaseMsg = message.toUpperCase();
+        String reverseMsg = new StringBuilder(message).reverse().toString();
+        String combinedResponse = uppercaseMsg + "\n" + reverseMsg;
+        ControllerMethod.sendMessage(channel, combinedResponse);
+        System.out.println("Sent to client: [" + combinedResponse + "]");
     }
 
     public static void uppercaseMsg(SocketChannel channel, String msg) throws IOException {
