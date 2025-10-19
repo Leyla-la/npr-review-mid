@@ -1,4 +1,4 @@
-package test.tcpip;
+package test.tcpip.ex21;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
