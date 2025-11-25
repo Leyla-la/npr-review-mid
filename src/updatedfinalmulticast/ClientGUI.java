@@ -3,17 +3,29 @@ import javax.swing.*;
 import java.awt.*;
 import java.io.*;
 import java.net.Socket;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+/*
+ ClientGUI (Broadcast Mode)
+ - GUI client cho chế độ broadcast/unicast
+ - Trách nhiệm:
+   * Kết nối tới server, gửi/nhận tin nhắn
+   * Gửi/broadcast file (upload) tới server
+   * Hiển thị log, tiến trình upload (progress bar) và thông báo
+ - Ghi chú: thêm dialog tiến trình upload để người dùng thấy trạng thái gửi file rõ ràng
+*/
 public class ClientGUI extends JFrame {
     private static final String HOST = "localhost";
     private static final int PORT = 4075;
 
+    // --- Socket và streams ---
     private Socket socket;
     private BufferedReader reader;
     private BufferedWriter writer;
     private DataInputStream dataIn;
     private DataOutputStream dataOut;
 
+    // --- GUI components ---
     private JTextArea txtLog;
     private JTextField txtStudentId;
     private JTextField txtMessage;
@@ -23,15 +35,28 @@ public class ClientGUI extends JFrame {
     private JButton btnSendFile;
     private JButton btnDisconnect;
     private JLabel lblStatus;
-    private JProgressBar progressBar;
+    private JProgressBar progressBar; // small progress bar in connection panel
 
     private boolean isConnected = false;
     private Thread messageListener;
+
+    // --- Upload dialog (modeless) ---
+    private JDialog uploadDialog;            // dialog hiển thị tiến trình upload
+    private JProgressBar dialogProgressBar;  // lớn hơn, hiển thị %
+    private JLabel dialogProgressLabel;      // mô tả chi tiết (Speed/ETA..)
+    // Cancellation helpers for upload
+    private volatile Thread uploadThread;
+    private final AtomicBoolean uploadCancelled = new AtomicBoolean(false);
 
     public ClientGUI() {
         initializeGUI();
     }
 
+    /*
+     initializeGUI()
+     - Xây dựng layout chính: connection panel, log panel, message panel
+     - Thiết lập listener để disconnect khi đóng cửa sổ
+    */
     private void initializeGUI() {
         setTitle("TCP Client - Broadcast Mode");
         setSize(750, 650);
@@ -55,6 +80,10 @@ public class ClientGUI extends JFrame {
         });
     }
 
+    /*
+     createConnectionPanel()
+     - Panel trên cùng: Student ID, Connect/Disconnect, status và progress nhỏ
+    */
     private JPanel createConnectionPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Connection"));
@@ -86,7 +115,7 @@ public class ClientGUI extends JFrame {
         lblStatus.setFont(new Font("Arial", Font.BOLD, 12));
         panel.add(lblStatus, gbc);
 
-        // Progress bar
+        // Progress bar nhỏ (hiển thị khi upload)
         gbc.gridy = 2;
         progressBar = new JProgressBar();
         progressBar.setStringPainted(true);
@@ -96,19 +125,28 @@ public class ClientGUI extends JFrame {
         return panel;
     }
 
+    /*
+     createLogPanel()
+     - Vùng log ở giữa: đổi font sang Times New Roman để phù hợp yêu cầu
+    */
     private JPanel createLogPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Communication Log"));
 
         txtLog = new JTextArea();
         txtLog.setEditable(false);
-        txtLog.setFont(new Font("Consolas", Font.PLAIN, 11));
+        // Đổi font log sang Times New Roman cho dễ đọc
+        txtLog.setFont(new Font("Times New Roman", Font.PLAIN, 12));
         JScrollPane scrollPane = new JScrollPane(txtLog);
         panel.add(scrollPane, BorderLayout.CENTER);
 
         return panel;
     }
 
+    /*
+     createMessagePanel()
+     - Panel dưới cùng: input message, các nút gửi
+    */
     private JPanel createMessagePanel() {
         JPanel panel = new JPanel(new BorderLayout(5, 5));
         panel.setBorder(BorderFactory.createTitledBorder("Send Message / File"));
@@ -129,13 +167,13 @@ public class ClientGUI extends JFrame {
         btnSend.addActionListener(e -> sendMessage());
         btnPanel.add(btnSend);
 
-        btnBroadcast = new JButton("📢 Broadcast");
+        btnBroadcast = new JButton("Broadcast");
         btnBroadcast.setEnabled(false);
         btnBroadcast.setToolTipText("Send to all connected clients");
         btnBroadcast.addActionListener(e -> broadcastMessage());
         btnPanel.add(btnBroadcast);
 
-        btnSendFile = new JButton("📁 Send File (Broadcast)");
+        btnSendFile = new JButton("Send File (Broadcast)");
         btnSendFile.setEnabled(false);
         btnSendFile.addActionListener(e -> sendFile());
         btnPanel.add(btnSendFile);
@@ -145,6 +183,11 @@ public class ClientGUI extends JFrame {
         return panel;
     }
 
+    /*
+     connect()
+     - Mở socket, tạo streams và gửi Student_ID
+     - Bắt đầu message listener thread
+    */
     private void connect() {
         String studentId = txtStudentId.getText().trim();
         if (studentId.isEmpty()) {
@@ -190,6 +233,11 @@ public class ClientGUI extends JFrame {
         }
     }
 
+    /*
+     startMessageListener()
+     - Lắng nghe các message từ server trên một thread riêng
+     - Xử lý broadcast message và broadcast file commands
+    */
     private void startMessageListener() {
         messageListener = new Thread(() -> {
             try {
@@ -197,12 +245,9 @@ public class ClientGUI extends JFrame {
                 while (isConnected && (line = reader.readLine()) != null) {
                     if ("BROADCAST_MSG".equals(line)) {
                         String message = reader.readLine();
-                        log("📢 [BROADCAST] " + message);
+                        log("[BROADCAST] " + message);
+                        SwingUtilities.invokeLater(() -> Toolkit.getDefaultToolkit().beep());
 
-                        // Hiển thị notification
-                        SwingUtilities.invokeLater(() -> {
-                            Toolkit.getDefaultToolkit().beep();
-                        });
                     }
                     else if ("BROADCAST_FILE".equals(line)) {
                         receiveFile();
@@ -211,7 +256,7 @@ public class ClientGUI extends JFrame {
             } catch (IOException e) {
                 if (isConnected) {
                     log("✗ Connection lost: " + e.getMessage());
-                    SwingUtilities.invokeLater(() -> disconnect());
+                    SwingUtilities.invokeLater(this::disconnect);
                 }
             }
         });
@@ -295,7 +340,7 @@ public class ClientGUI extends JFrame {
         }
 
         try {
-            log("📢 Broadcasting: " + message);
+            log("Broadcasting: " + message);
             writer.write("BROADCAST_MSG");
             writer.newLine();
             writer.write(message);
@@ -315,6 +360,52 @@ public class ClientGUI extends JFrame {
         }
     }
 
+    /*
+     ensureUploadDialog()
+     - Tạo dialog modeless với progress bar lớn và nhãn mô tả
+     - Dialog được sử dụng để hiển thị tiến trình upload song song với progressBar nhỏ
+    */
+    private void ensureUploadDialog() {
+        if (uploadDialog != null) return;
+
+        uploadDialog = new JDialog(this, "Uploading...", Dialog.ModalityType.MODELESS);
+        uploadDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+        uploadDialog.setSize(420, 140);
+        uploadDialog.setResizable(false);
+
+        JPanel content = new JPanel(new BorderLayout(10, 10));
+        content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+
+        dialogProgressLabel = new JLabel("Starting upload...");
+        dialogProgressLabel.setFont(new Font("Times New Roman", Font.PLAIN, 12));
+        content.add(dialogProgressLabel, BorderLayout.NORTH);
+
+        dialogProgressBar = new JProgressBar(0, 100);
+        dialogProgressBar.setStringPainted(true);
+        dialogProgressBar.setValue(0);
+        content.add(dialogProgressBar, BorderLayout.CENTER);
+
+        // South: Cancel button to request upload cancellation (sends CANCEL frame)
+        JPanel south = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton btnCancel = new JButton("Cancel");
+        btnCancel.setFont(new Font("Times New Roman", Font.PLAIN, 12));
+        btnCancel.addActionListener(e -> {
+            uploadCancelled.set(true);
+            dialogProgressLabel.setText("Cancelling...");
+            btnCancel.setEnabled(false);
+        });
+        south.add(btnCancel);
+        content.add(south, BorderLayout.SOUTH);
+
+        uploadDialog.getContentPane().add(content);
+        uploadDialog.setLocationRelativeTo(this);
+    }
+
+    /*
+     sendFile()
+     - Gửi file theo luồng nền và cập nhật cả progressBar nhỏ + dialogProgressBar
+     - Sử dụng framed protocol: for each chunk sendInt(len)+bytes; 0=end; -1=cancel
+    */
     private void sendFile() {
         if (!isConnected) return;
 
@@ -330,10 +421,20 @@ public class ClientGUI extends JFrame {
             progressBar.setValue(0);
             progressBar.setString("Preparing...");
 
+            // Ensure dialog exists and show it (modeless)
+            ensureUploadDialog();
+            SwingUtilities.invokeLater(() -> {
+                dialogProgressBar.setValue(0);
+                dialogProgressLabel.setText("Preparing upload...");
+                uploadDialog.setLocationRelativeTo(this);
+                uploadDialog.setVisible(true);
+            });
+
             // Upload in background thread
-            new Thread(() -> {
+            uploadCancelled.set(false);
+            uploadThread = new Thread(() -> {
                 try {
-                    log("\n📢 Broadcasting file: " + file.getName() + " (" + file.length() + " bytes)");
+                    log("\nBroadcasting file: " + file.getName() + " (" + file.length() + " bytes)");
 
                     writer.write("FILE");
                     writer.newLine();
@@ -343,7 +444,7 @@ public class ClientGUI extends JFrame {
                     dataOut.writeLong(file.length());
                     dataOut.flush();
 
-                    // Upload with progress
+                    // Upload with framed chunks: writeInt(len)+bytes; 0=end; -1=cancel
                     try (FileInputStream fis = new FileInputStream(file)) {
                         byte[] buffer = new byte[4096];
                         int bytesRead;
@@ -351,35 +452,64 @@ public class ClientGUI extends JFrame {
                         long fileSize = file.length();
 
                         while ((bytesRead = fis.read(buffer)) != -1) {
+                            if (uploadCancelled.get()) {
+                                try { dataOut.writeInt(-1); dataOut.flush(); } catch (IOException ignored) {}
+                                log("✗ Upload cancelled by user (sent CANCEL frame)");
+                                break;
+                            }
+
+                            dataOut.writeInt(bytesRead);
                             dataOut.write(buffer, 0, bytesRead);
+                            dataOut.flush();
+
                             totalSent += bytesRead;
 
                             int progress = (int)((totalSent * 100) / fileSize);
                             SwingUtilities.invokeLater(() -> {
                                 progressBar.setValue(progress);
                                 progressBar.setString("Uploading: " + progress + "%");
+                                if (dialogProgressBar != null) {
+                                    dialogProgressBar.setValue(progress);
+                                    dialogProgressBar.setString(progress + "%");
+                                }
+                                if (dialogProgressLabel != null) dialogProgressLabel.setText(
+                                        String.format("Uploading: %d%% (%s / %s)",
+                                                progress, formatFileSize(totalSent), formatFileSize(fileSize)));
                             });
                         }
-                        dataOut.flush();
+
+                        if (!uploadCancelled.get()) {
+                            try { dataOut.writeInt(0); dataOut.flush(); } catch (IOException ignored) {}
+                        }
                     }
 
-                    String serverResponse = dataIn.readUTF();
+                    // Wait for server response (SUCCESS / CANCELLED / ERROR)
+                    String serverResponse = null;
+                    try {
+                        serverResponse = dataIn.readUTF();
+                    } catch (IOException ignored) {}
 
-                    if ("SUCCESS".equals(serverResponse)) {
+                    if (uploadCancelled.get()) {
+                        log("✗ Upload cancelled locally");
+                        if (serverResponse != null) log("<< Server response after cancel: " + serverResponse);
+                        SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
+                                "Upload cancelled.", "Cancelled", JOptionPane.INFORMATION_MESSAGE));
+
+                    } else if ("SUCCESS".equals(serverResponse)) {
                         log("✓ File broadcasted successfully!\n");
                         SwingUtilities.invokeLater(() -> {
                             progressBar.setString("Complete!");
+                            if (dialogProgressLabel != null) dialogProgressLabel.setText("Upload complete!");
                             JOptionPane.showMessageDialog(this,
-                                    "File broadcasted to all clients!",
-                                    "Success", JOptionPane.INFORMATION_MESSAGE);
+                                    "File broadcasted to all clients!", "Success", JOptionPane.INFORMATION_MESSAGE);
                         });
                     } else {
                         log("✗ Broadcast failed: " + serverResponse + "\n");
                         SwingUtilities.invokeLater(() -> {
                             progressBar.setString("Failed!");
+                            if (dialogProgressLabel != null) dialogProgressLabel.setText("Upload failed");
                             JOptionPane.showMessageDialog(this,
-                                    "Broadcast failed: " + serverResponse,
-                                    "Error", JOptionPane.ERROR_MESSAGE);
+                                    "Broadcast failed: " + serverResponse, "Error", JOptionPane.ERROR_MESSAGE);
                         });
                     }
 
@@ -387,21 +517,25 @@ public class ClientGUI extends JFrame {
                     log("✗ File send error: " + e.getMessage() + "\n");
                     SwingUtilities.invokeLater(() -> {
                         progressBar.setString("Error!");
+                        if (dialogProgressLabel != null) dialogProgressLabel.setText("Error during upload");
                         JOptionPane.showMessageDialog(this,
-                                "Cannot send file!\n" + e.getMessage(),
-                                "Error", JOptionPane.ERROR_MESSAGE);
+                                "Cannot send file!\n" + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
                     });
                 } finally {
                     SwingUtilities.invokeLater(() -> {
+                        uploadThread = null;
+                        uploadCancelled.set(false);
                         setButtonsEnabled(true);
-                        new Timer(2000, evt -> {
+                        new Timer(1500, evt -> {
                             progressBar.setVisible(false);
                             progressBar.setValue(0);
+                            if (uploadDialog != null && uploadDialog.isVisible()) uploadDialog.setVisible(false);
                             ((Timer)evt.getSource()).stop();
                         }).start();
                     });
                 }
-            }).start();
+            });
+            uploadThread.start();
         }
     }
 
@@ -410,15 +544,22 @@ public class ClientGUI extends JFrame {
             String fileName = dataIn.readUTF();
             long fileSize = dataIn.readLong();
 
-            log("\n📥 Receiving broadcast file: " + fileName + " (" + fileSize + " bytes)");
+            log("\nReceiving broadcast file: " + fileName + " (" + fileSize + " bytes)");
 
             SwingUtilities.invokeLater(() -> {
                 progressBar.setVisible(true);
                 progressBar.setValue(0);
                 progressBar.setString("Downloading: 0%");
+
+                // Sync dialog if present
+                if (dialogProgressBar != null) {
+                    dialogProgressBar.setValue(0);
+                    dialogProgressLabel.setText("Downloading...");
+                    uploadDialog.setLocationRelativeTo(this);
+                    uploadDialog.setVisible(true);
+                }
             });
 
-            // Create downloads directory
             File downloadDir = new File("client_downloads/");
             downloadDir.mkdirs();
 
@@ -427,33 +568,54 @@ public class ClientGUI extends JFrame {
             try (FileOutputStream fos = new FileOutputStream(saveFile)) {
                 byte[] buffer = new byte[4096];
                 long totalReceived = 0;
-                int bytesRead;
 
-                while (totalReceived < fileSize) {
-                    int toRead = (int)Math.min(buffer.length, fileSize - totalReceived);
-                    bytesRead = dataIn.read(buffer, 0, toRead);
-                    if (bytesRead == -1) break;
+                while (true) {
+                    int frameLen = dataIn.readInt();
+                    if (frameLen == -1) {
+                        // sender cancelled
+                        log("✗ Sender cancelled upload\n");
+                        break;
+                    }
+                    if (frameLen == 0) {
+                        // finished
+                        break;
+                    }
 
-                    fos.write(buffer, 0, bytesRead);
-                    totalReceived += bytesRead;
+                    int remaining = frameLen;
+                    while (remaining > 0) {
+                        int toRead = Math.min(remaining, buffer.length);
+                        int actuallyRead = dataIn.read(buffer, 0, toRead);
+                        if (actuallyRead == -1) throw new EOFException("Unexpected EOF while receiving frame");
+                        fos.write(buffer, 0, actuallyRead);
+                        totalReceived += actuallyRead;
+                        remaining -= actuallyRead;
+                    }
 
-                    int progress = (int)((totalReceived * 100) / fileSize);
+                    int progress = (fileSize > 0) ? (int)((totalReceived * 100) / fileSize) : 0;
                     SwingUtilities.invokeLater(() -> {
                         progressBar.setValue(progress);
                         progressBar.setString("Downloading: " + progress + "%");
+                        if (dialogProgressBar != null) {
+                            dialogProgressBar.setValue(progress);
+                            dialogProgressBar.setString(progress + "%");
+                            dialogProgressLabel.setText(String.format("Downloading: %d%% (%s / %s)",
+                                    progress, formatFileSize(totalReceived), formatFileSize(fileSize)));
+                        }
                     });
                 }
             }
 
-            log("✓ File saved: " + saveFile.getAbsolutePath() + "\n");
+            log("✓ File saved: " + new File("client_downloads/", fileName).getAbsolutePath() + "\n");
 
             SwingUtilities.invokeLater(() -> {
                 progressBar.setString("Download complete!");
+                if (dialogProgressLabel != null) dialogProgressLabel.setText("Download complete!");
                 Toolkit.getDefaultToolkit().beep();
 
-                new Timer(2000, evt -> {
+                new Timer(1500, evt -> {
                     progressBar.setVisible(false);
                     progressBar.setValue(0);
+                    if (uploadDialog != null && uploadDialog.isVisible()) uploadDialog.setVisible(false);
                     ((Timer)evt.getSource()).stop();
                 }).start();
             });
@@ -463,6 +625,8 @@ public class ClientGUI extends JFrame {
             SwingUtilities.invokeLater(() -> {
                 progressBar.setString("Download failed!");
                 progressBar.setVisible(false);
+                if (dialogProgressLabel != null) dialogProgressLabel.setText("Download failed");
+                if (uploadDialog != null && uploadDialog.isVisible()) uploadDialog.setVisible(false);
             });
         }
     }
@@ -506,5 +670,19 @@ public class ClientGUI extends JFrame {
             }
             new ClientGUI().setVisible(true);
         });
+    }
+
+    // Định dạng kích thước file cho dễ đọc (ví dụ: 1.5 MB)
+    private String formatFileSize(long size) {
+        String[] units = {"B", "KB", "MB", "GB"};
+        int i = 0;
+        double doubleSize = size;
+
+        while (i < units.length - 1 && size >= 1024) {
+            size /= 1024;
+            i++;
+        }
+
+        return String.format("%.1f %s", doubleSize, units[i]);
     }
 }

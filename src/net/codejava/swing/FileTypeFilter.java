@@ -5,9 +5,23 @@ import java.io.File;
 import javax.swing.filechooser.FileFilter;
 
 public class FileTypeFilter extends FileFilter {
-    @Override
-    public boolean accept(File f) { return true; }
+    private final String extension;
+    private final String description;
+
+    public FileTypeFilter(String extension, String description) {
+        this.extension = extension.startsWith(".") ? extension : "." + extension;
+        this.description = description;
+    }
 
     @Override
-    public String getDescription() { return "All files"; }
+    public boolean accept(File f) {
+        if (f.isDirectory()) return true;
+        return f.getName().toLowerCase().endsWith(extension.toLowerCase());
+    }
+
+    @Override
+    public String getDescription() {
+        return description + String.format(" (*%s)", extension);
+    }
 }
+

@@ -1,4 +1,3 @@
-
 package updatedmid2025unicast;
 import javax.swing.*;
 import java.awt.*;
@@ -7,29 +6,60 @@ import java.math.BigInteger;
 import java.net.*;
 import java.util.*;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
+/*
+ Server.java
+ - Đây là lớp GUI + server TCP dạng unicast.
+ - Trách nhiệm chính:
+   * Hiển thị giao diện (start/stop server, log, danh sách client)
+   * Lắng nghe kết nối client và tạo một ClientHandler cho mỗi client
+   * Quản lý thư mục lưu file upload
+ - Lưu ý: mỗi client được xử lý trong một thread riêng bằng ClientHandler
+ */
 public class Server extends JFrame {
-    private static final int PORT = 4075;
-    private static final String UPLOAD_DIR = "server_files_unicast/";
+    // Logger để ghi lại lỗi nghiêm trọng thay vì dùng printStackTrace
+    private static final Logger LOGGER = Logger.getLogger(Server.class.getName());
+    // --- Cấu hình server ---
+    private static final int PORT = 4075;                    // port lắng nghe
+    private static final String UPLOAD_DIR = "server_files_unicast/"; // thư mục lưu file upload
 
-    private JTextArea txtLog;
-    private JButton btnStart;
-    private JButton btnStop;
-    private JLabel lblStatus;
-    private JLabel lblClientCount;
-    private DefaultListModel<String> clientListModel;
-    private JList<String> clientList;
+    // --- Thành phần GUI ---
+    private JTextArea txtLog;         // vùng hiển thị log server
+    private JButton btnStart;         // nút start server
+    private JButton btnStop;          // nút stop server
+    private JLabel lblStatus;         // trạng thái server (Running/Stopped)
+    private JLabel lblClientCount;    // hiển thị số client đang kết nối
+    private DefaultListModel<String> clientListModel; // model cho danh sách client
+    private JList<String> clientList; // component hiển thị danh sách client
 
-    private ServerSocket serverSocket;
-    private boolean isRunning = false;
-    private List<ClientHandler> clients = Collections.synchronizedList(new ArrayList<>());
-    private int clientCounter = 0;
+    // --- Trạng thái server ---
+    private ServerSocket serverSocket;                       // socket lắng nghe
+    private boolean isRunning = false;                       // cờ trạng thái server
+    private final List<ClientHandler> clients = Collections.synchronizedList(new ArrayList<>());
+                                                          // danh sách handler (đồng bộ)
+    private int clientCounter = 0;                           // bộ đếm client để đặt id
 
+    /*
+     Constructor
+     - Khởi tạo GUI
+     - Kiểm tra/ tạo thư mục upload nếu cần
+    */
     public Server() {
         initializeGUI();
-        new File(UPLOAD_DIR).mkdirs();
+        File dir = new File(UPLOAD_DIR);
+        if (!dir.exists()) {
+            boolean created = dir.mkdirs();
+            if (!created) {
+                // Trường hợp không tạo được thư mục: log ra stderr (GUI chưa sẵn sàng để log)
+                System.err.println("Warning: cannot create upload directory: " + UPLOAD_DIR);
+            }
+        }
     }
 
+    // --- Phần tạo GUI ---
+    // create initializeGUI() builds the main window: control panel + split pane (log + client list)
     private void initializeGUI() {
         setTitle("TCP Server - Unicast Mode");
         setSize(900, 600);
@@ -52,11 +82,16 @@ public class Server extends JFrame {
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosing(java.awt.event.WindowEvent e) {
-                stopServer();
+                stopServer(); // đảm bảo server được dừng khi đóng cửa sổ
             }
         });
     }
 
+    /*
+     Tạo control panel (Start/Stop + status)
+     - btnStart: bắt đầu lắng nghe kết nối
+     - btnStop: dừng server, đóng các client handler
+    */
     private JPanel createControlPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Server Control"));
@@ -91,13 +126,18 @@ public class Server extends JFrame {
         return panel;
     }
 
+    /*
+     Tạo panel log
+     - txtLog: vùng hiển thị các message, status, progress
+    */
     private JPanel createLogPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Server Log"));
 
         txtLog = new JTextArea();
         txtLog.setEditable(false);
-        txtLog.setFont(new Font("Consolas", Font.PLAIN, 11));
+        // Use Times New Roman for server logs per user request
+        txtLog.setFont(new Font("Times New Roman", Font.PLAIN, 12));
         txtLog.setBackground(new Color(240, 240, 240));
         JScrollPane scrollPane = new JScrollPane(txtLog);
         panel.add(scrollPane, BorderLayout.CENTER);
@@ -105,6 +145,11 @@ public class Server extends JFrame {
         return panel;
     }
 
+    /*
+     Tạo panel danh sách client
+     - clientListModel + clientList dùng để hiển thị các client đang kết nối
+     - getDisplayInfo() của mỗi ClientHandler được đưa vào model
+    */
     private JPanel createClientListPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Connected Clients"));
@@ -118,6 +163,12 @@ public class Server extends JFrame {
         return panel;
     }
 
+    /*
+     startServer()
+     - Mở ServerSocket và khởi động thread chính để accept connections
+     - Với mỗi kết nối: tạo ClientHandler, thêm vào danh sách và start thread handler
+     - Cập nhật GUI (status, client list)
+    */
     private void startServer() {
         try {
             serverSocket = new ServerSocket(PORT);
@@ -167,6 +218,11 @@ public class Server extends JFrame {
         }
     }
 
+    /*
+     stopServer()
+     - Dừng server: đóng tất cả ClientHandler, đóng ServerSocket
+     - Cập nhật GUI
+    */
     private void stopServer() {
         isRunning = false;
 
@@ -197,6 +253,11 @@ public class Server extends JFrame {
         }
     }
 
+    /*
+     updateClientList()
+     - Cập nhật model của JList để hiển thị client hiện đang kết nối
+     - Gọi từ nhiều thread, nên dùng SwingUtilities.invokeLater để an toàn với EDT
+    */
     private void updateClientList() {
         SwingUtilities.invokeLater(() -> {
             clientListModel.clear();
@@ -209,6 +270,10 @@ public class Server extends JFrame {
         });
     }
 
+    /*
+     log(message)
+     - Ghi message vào vùng txtLog (sử dụng invokeLater để chạy trên EDT)
+    */
     private void log(String message) {
         SwingUtilities.invokeLater(() -> {
             txtLog.append(message + "\n");
@@ -216,6 +281,14 @@ public class Server extends JFrame {
         });
     }
 
+    /*
+     ClientHandler
+     - Lớp xử lý riêng cho từng client kết nối
+     - Trách nhiệm:
+       * đọc Student_ID ban đầu và phản hồi (4×ID)
+       * lắng nghe lệnh từ client: QUIT, FILE, hoặc tin nhắn (xử lý số mũ 4)
+       * xử lý upload file theo framed protocol (int length + data), hỗ trợ CANCEL (-1)
+    */
     private class ClientHandler implements Runnable {
         private Socket socket;
         private String clientId;
@@ -231,6 +304,7 @@ public class Server extends JFrame {
             this.clientId = clientId;
             this.clientInfo = clientInfo;
             try {
+                // Mỗi handler giữ riêng streams của mình (không chia sẻ)
                 reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
                 dataIn = new DataInputStream(socket.getInputStream());
@@ -240,6 +314,7 @@ public class Server extends JFrame {
             }
         }
 
+        // getDisplayInfo: dùng để show danh sách client trên GUI
         String getDisplayInfo() {
             return clientId + " [" + studentId + "] - " + clientInfo;
         }
@@ -247,39 +322,43 @@ public class Server extends JFrame {
         @Override
         public void run() {
             try {
-                // Nhận Student_ID đầu tiên
+                // Nhận Student_ID đầu tiên (protocol yêu cầu client gửi ID sau khi connect)
                 studentId = reader.readLine();
                 if (studentId != null && !studentId.isEmpty()) {
-                    log("→ " + clientId + " sent Student_ID: " + studentId);
+                    log(">> " + clientId + " sent Student_ID: " + studentId);
 
                     String response = calculateFirstResponse(studentId);
                     writer.write(response);
                     writer.newLine();
                     writer.flush();
-                    log("← Sent to " + clientId + ": 4×" + studentId + " = " + response);
+                    log("<< Sent to " + clientId + ": 4×" + studentId + " = " + response);
 
                     updateClientList();
                 }
 
-                // Vòng lặp xử lý commands
+                // Vòng lặp xử lý các lệnh/tin nhắn từ client
                 String command;
                 while ((command = reader.readLine()) != null) {
-                    log("\n→ " + clientId + " command: " + command);
+                    log("\n>> " + clientId + " command: " + command);
 
                     if ("QUIT".equals(command)) {
+                        // client muốn ngắt kết nối
                         log("✓ " + clientId + " requested disconnect");
                         break;
                     }
                     else if ("FILE".equals(command)) {
+                        // client chuẩn bị gửi file theo framed protocol
                         handleFileUpload();
                     }
                     else {
+                        // trường hợp gửi message; server trả về echo hoặc số mũ 4
                         handleMessage(command);
                     }
                 }
             } catch (IOException e) {
                 log("✗ " + clientId + " error: " + e.getMessage());
             } finally {
+                // Cleanup khi client disconnect hoặc có lỗi
                 close();
                 clients.remove(this);
                 log("✗ " + clientId + " disconnected\n");
@@ -287,6 +366,10 @@ public class Server extends JFrame {
             }
         }
 
+        /*
+         calculateFirstResponse(id)
+         - Nếu id là số, trả 4×id; nếu không, trả lỗi
+        */
         private String calculateFirstResponse(String id) {
             try {
                 return new BigInteger(id).multiply(BigInteger.valueOf(4)).toString();
@@ -295,6 +378,11 @@ public class Server extends JFrame {
             }
         }
 
+        /*
+         handleMessage(msg)
+         - Xử lý tin nhắn thường: nếu msg là số >0, gửi num^4; nếu không, echo lại
+         - Ghi log tương ứng
+        */
         private void handleMessage(String msg) throws IOException {
             String response = processMessage(msg);
             writer.write(response);
@@ -304,15 +392,19 @@ public class Server extends JFrame {
             try {
                 BigInteger num = new BigInteger(msg);
                 if (num.compareTo(BigInteger.ZERO) > 0) {
-                    log("← Sent to " + clientId + ": [" + msg + "]^4 = " + response);
+                    log("<< Sent to " + clientId + ": [" + msg + "]^4 = " + response);
                 } else {
-                    log("← Sent to " + clientId + ": (echo) " + response);
+                    log("<< Sent to " + clientId + ": (echo) " + response);
                 }
             } catch (NumberFormatException e) {
-                log("← Sent to " + clientId + ": (echo) " + response);
+                log("<< Sent to " + clientId + ": (echo) " + response);
             }
         }
 
+        /*
+         processMessage(msg)
+         - Trả về num^4 nếu msg là số (>0), ngược lại trả về msg (echo)
+        */
         private String processMessage(String msg) {
             try {
                 BigInteger num = new BigInteger(msg);
@@ -326,59 +418,135 @@ public class Server extends JFrame {
             }
         }
 
+
+        /*
+         handleFileUpload()
+         - Đọc fileName (UTF) và fileSize (long)
+         - Đọc các frame: mỗi frame bắt đầu bằng một int (độ dài)
+             * -1 => CLIENT CANCELLED (không đọc thêm), server xóa partial và trả "CANCELLED"
+             * 0  => EOF (kết thúc gửi thành công)
+             * >0 => đọc đúng số byte đó và ghi vào file
+         - Sau khi hoàn thành, nếu tổng byte nhận == fileSize => trả "SUCCESS"; ngược lại xóa partial và trả lỗi
+         - Xử lý các trường hợp EOF bất ngờ, lỗi IO
+         - Ghi log tiến trình mỗi ~500ms
+        */
         private void handleFileUpload() throws IOException {
             try {
                 String fileName = dataIn.readUTF();
                 long fileSize = dataIn.readLong();
 
-                log("  ↓ Receiving file: " + fileName);
+                log("  >> Receiving file: " + fileName);
                 log("    Size: " + formatFileSize(fileSize));
 
                 String savePath = UPLOAD_DIR + clientId + "_" + fileName;
 
+                long totalReceived = 0;
+                boolean cancelled = false;
+                long lastLogTime = System.currentTimeMillis();
+
                 try (FileOutputStream fos = new FileOutputStream(savePath)) {
                     byte[] buffer = new byte[4096];
-                    long totalReceived = 0;
-                    int bytesRead;
-                    long lastLogTime = System.currentTimeMillis();
 
-                    while (totalReceived < fileSize) {
-                        int toRead = (int)Math.min(buffer.length, fileSize - totalReceived);
-                        bytesRead = dataIn.read(buffer, 0, toRead);
-                        if (bytesRead == -1) break;
-
-                        fos.write(buffer, 0, bytesRead);
-                        totalReceived += bytesRead;
-
-                        // Log progress mỗi 500ms
-                        long currentTime = System.currentTimeMillis();
-                        if (currentTime - lastLogTime > 500 || totalReceived == fileSize) {
-                            int progress = (int)((totalReceived * 100) / fileSize);
-                            log("    Progress: " + progress + "% (" + formatFileSize(totalReceived) +
-                                    " / " + formatFileSize(fileSize) + ")");
-                            lastLogTime = currentTime;
+                    while (true) {
+                        int frameLen;
+                        try {
+                            frameLen = dataIn.readInt();
+                        } catch (EOFException eof) {
+                            // client disconnected unexpectedly
+                            cancelled = true;
+                            log("    (EOF) Client disconnected while sending file");
+                            break;
                         }
+
+                        if (frameLen == -1) {
+                            // client requested cancel
+                            cancelled = true;
+                            log("    Client sent CANCEL frame");
+                            break;
+                        }
+
+                        if (frameLen == 0) {
+                            // finished sending
+                            break;
+                        }
+
+                        int remaining = frameLen;
+                        while (remaining > 0) {
+                            int toRead = Math.min(remaining, buffer.length);
+                            int actuallyRead = dataIn.read(buffer, 0, toRead);
+                            if (actuallyRead == -1) {
+                                cancelled = true;
+                                log("    Unexpected EOF while reading chunk");
+                                break;
+                            }
+                            fos.write(buffer, 0, actuallyRead);
+                            totalReceived += actuallyRead;
+                            remaining -= actuallyRead;
+
+                            long currentTime = System.currentTimeMillis();
+                            if (currentTime - lastLogTime > 500 || totalReceived == fileSize) {
+                                int progress = (fileSize > 0) ? (int)((totalReceived * 100) / fileSize) : 0;
+                                log("    Progress: " + progress + "% (" + formatFileSize(totalReceived) +
+                                        " / " + formatFileSize(fileSize) + ")");
+                                lastLogTime = currentTime;
+                            }
+                        }
+
+                        if (cancelled) break;
                     }
+                    fos.getFD().sync();
                 }
 
-                dataOut.writeUTF("SUCCESS");
-                dataOut.flush();
+                if (cancelled || totalReceived != fileSize) {
+                    // delete partial file if exists
+                    File partial = new File(savePath);
+                    if (partial.exists()) {
+                        if (!partial.delete()) {
+                            log("    Warning: failed to delete partial file: " + savePath);
+                        }
+                    }
 
-                log("  ✓ File saved successfully: " + savePath + "\n");
+                    try {
+                        if (cancelled) {
+                            dataOut.writeUTF("CANCELLED");
+                        } else {
+                            dataOut.writeUTF("ERROR: Incomplete upload");
+                        }
+                        dataOut.flush();
+                    } catch (IOException ignored) {
+                        // client may have disconnected
+                    }
+
+                    log("  ✗ File upload incomplete or cancelled: " + savePath + "\n");
+                } else {
+                    try {
+                        dataOut.writeUTF("SUCCESS");
+                        dataOut.flush();
+                    } catch (IOException ignored) {
+                        // client likely disconnected
+                    }
+                    log("  ✓ File saved successfully: " + savePath + "\n");
+                }
 
             } catch (IOException e) {
                 log("  ✗ File upload error: " + e.getMessage());
-                dataOut.writeUTF("ERROR: " + e.getMessage());
-                dataOut.flush();
+                try {
+                    dataOut.writeUTF("ERROR: " + e.getMessage());
+                    dataOut.flush();
+                } catch (IOException ignored) {
+                    // ignore
+                }
             }
         }
 
+        // formatFileSize: helper để format kích thước file cho log
         private String formatFileSize(long bytes) {
             if (bytes < 1024) return bytes + " B";
             if (bytes < 1024 * 1024) return String.format("%.2f KB", bytes / 1024.0);
             return String.format("%.2f MB", bytes / (1024.0 * 1024.0));
         }
 
+        // close: đóng các stream và socket của client handler
         void close() {
             try {
                 if (reader != null) reader.close();
@@ -392,12 +560,14 @@ public class Server extends JFrame {
         }
     }
 
+    // main: tạo và hiển thị GUI server
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
             try {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ghi lỗi qua Logger thay vì in stack trace trực tiếp
+                LOGGER.log(Level.SEVERE, "Failed to set system look and feel", e);
             }
             new Server().setVisible(true);
         });
