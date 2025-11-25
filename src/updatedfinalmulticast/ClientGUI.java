@@ -465,16 +465,20 @@ public class ClientGUI extends JFrame {
                             totalSent += bytesRead;
 
                             int progress = (int)((totalSent * 100) / fileSize);
+                            // Make final copies for use inside lambda (lambdas require variables to be final or effectively final)
+                            final int progressCopy = progress;
+                            final long totalSentCopy = totalSent;
+                            final long fileSizeCopy = fileSize;
                             SwingUtilities.invokeLater(() -> {
-                                progressBar.setValue(progress);
-                                progressBar.setString("Uploading: " + progress + "%");
+                                progressBar.setValue(progressCopy);
+                                progressBar.setString("Uploading: " + progressCopy + "%");
                                 if (dialogProgressBar != null) {
-                                    dialogProgressBar.setValue(progress);
-                                    dialogProgressBar.setString(progress + "%");
+                                    dialogProgressBar.setValue(progressCopy);
+                                    dialogProgressBar.setString(progressCopy + "%");
                                 }
                                 if (dialogProgressLabel != null) dialogProgressLabel.setText(
                                         String.format("Uploading: %d%% (%s / %s)",
-                                                progress, formatFileSize(totalSent), formatFileSize(fileSize)));
+                                                progressCopy, formatFileSize(totalSentCopy), formatFileSize(fileSizeCopy)));
                             });
                         }
 
@@ -505,11 +509,12 @@ public class ClientGUI extends JFrame {
                         });
                     } else {
                         log("✗ Broadcast failed: " + serverResponse + "\n");
+                        final String serverResponseCopy = serverResponse;
                         SwingUtilities.invokeLater(() -> {
                             progressBar.setString("Failed!");
                             if (dialogProgressLabel != null) dialogProgressLabel.setText("Upload failed");
                             JOptionPane.showMessageDialog(this,
-                                    "Broadcast failed: " + serverResponse, "Error", JOptionPane.ERROR_MESSAGE);
+                                    "Broadcast failed: " + serverResponseCopy, "Error", JOptionPane.ERROR_MESSAGE);
                         });
                     }
 
@@ -592,14 +597,17 @@ public class ClientGUI extends JFrame {
                     }
 
                     int progress = (fileSize > 0) ? (int)((totalReceived * 100) / fileSize) : 0;
+                    final int progressCopy = progress;
+                    final long totalReceivedCopy = totalReceived;
+                    final long fileSizeCopy = fileSize;
                     SwingUtilities.invokeLater(() -> {
-                        progressBar.setValue(progress);
-                        progressBar.setString("Downloading: " + progress + "%");
+                        progressBar.setValue(progressCopy);
+                        progressBar.setString("Downloading: " + progressCopy + "%");
                         if (dialogProgressBar != null) {
-                            dialogProgressBar.setValue(progress);
-                            dialogProgressBar.setString(progress + "%");
+                            dialogProgressBar.setValue(progressCopy);
+                            dialogProgressBar.setString(progressCopy + "%");
                             dialogProgressLabel.setText(String.format("Downloading: %d%% (%s / %s)",
-                                    progress, formatFileSize(totalReceived), formatFileSize(fileSize)));
+                                    progressCopy, formatFileSize(totalReceivedCopy), formatFileSize(fileSizeCopy)));
                         }
                     });
                 }
@@ -686,3 +694,4 @@ public class ClientGUI extends JFrame {
         return String.format("%.1f %s", doubleSize, units[i]);
     }
 }
+
