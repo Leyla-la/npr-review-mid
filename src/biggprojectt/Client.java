@@ -9,6 +9,7 @@ import javax.swing.event.DocumentListener;
 import java.awt.*;
 import java.io.*;
 import java.net.*;
+import javax.net.ssl.*;
 import java.util.HashMap;
 
 /*
@@ -25,6 +26,7 @@ public class Client extends JFrame {
     private static final String HOST = "localhost";
     private static final int PORT = 1234;                    // THAY = 4 số cuối MSSV
     private static final String STUDENT_ID = "20230001";     // THAY = MSSV của bạn
+    private static final String STUDENT_PASS = "123456";     // THAY = password for auth store
 
     // --- Socket & streams ---
     private Socket socket;
@@ -200,15 +202,29 @@ public class Client extends JFrame {
     */
     private void connect() {
         try {
-            socket = new Socket(HOST, PORT);
+            // Follow secure.txt approach: set JSSE system properties or rely on default keystore set in server
+            // Create an SSLSocket to the server instead of plain Socket
+            SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
+            socket = sf.createSocket(HOST, PORT);
             dataOut = new DataOutputStream(socket.getOutputStream());
             dataIn = new DataInputStream(socket.getInputStream());
 
-            // Send initial ID using writeUTF (control channel)
+            // Send authentication handshake (username then password as UTF) per secure.txt LoginClient
             dataOut.writeUTF(STUDENT_ID);
-            statusLabel.setText("Connected");
+            dataOut.writeUTF(STUDENT_PASS);
+            dataOut.flush();
 
-            new Thread(this::receiveLoop).start();
+            // Server will respond with AUTH_OK or AUTH_FAIL
+            String authResp = dataIn.readUTF();
+            if ("AUTH_OK".equals(authResp)) {
+                statusLabel.setText("Connected (TLS, authenticated)");
+                // Start receive loop
+                new Thread(this::receiveLoop).start();
+            } else {
+                statusLabel.setText("Auth failed");
+                appendMain("Authentication failed: " + authResp);
+                socket.close();
+            }
         } catch (Exception e) {
             statusLabel.setText("Lỗi kết nối!");
         }
