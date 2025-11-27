@@ -88,6 +88,7 @@ public class Server {
         final Socket socket;
         final BufferedReader in;
         final PrintWriter out;
+        final String clientId; // address-based id for logging before username assigned
         String username;
         String rawId;
         String room = "Lobby";
@@ -99,7 +100,16 @@ public class Server {
             this.in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             this.out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8), true);
             this.username = id; // provisional until ID handshake
+            this.clientId = id;
         }
+
+        // Send a raw line and log it (use clientId when username isn't finalized)
+        private void sendRawAndLog(String line) {
+            out.println(line);
+            out.flush();
+            log("SEND to " + (username == null ? clientId : username) + " => " + line);
+        }
+
 
         public void send(String line) {
             out.println(line);
@@ -114,7 +124,7 @@ public class Server {
                 // AUTH flow
                 if (requireAuth) {
                     if (!line.startsWith("AUTH:")) {
-                        out.println("AUTH_REQ"); out.flush();
+                        sendRawAndLog("AUTH_REQ");
                         line = in.readLine();
                         if (line == null) { socket.close(); return; }
                     }
@@ -124,9 +134,13 @@ public class Server {
                         String pass = p.length>2?p[2].trim():"";
                         String exp = credentials.get(user);
                         if (exp!=null && exp.equals(pass)) {
-                            out.println("AUTH_OK"); username = user; }
-                        else { out.println("AUTH_FAIL"); socket.close(); return; }
-                    } else { out.println("AUTH_FAIL"); socket.close(); return; }
+                            sendRawAndLog("AUTH_OK"); username = user; }
+                        else {
+                            sendRawAndLog("AUTH_FAIL"); socket.close(); return;
+                        }
+                    } else {
+                        sendRawAndLog("AUTH_FAIL"); socket.close(); return;
+                    }
                 } else {
                     // accept ID:<id> or plain
                     String rid;
